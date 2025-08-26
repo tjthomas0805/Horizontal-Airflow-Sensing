@@ -1,5 +1,5 @@
 make clean
 make cf21bl_defconfig
-make menuconfig (if needed)
+make menuconfig (if needed) Platform configuration > change from crazyflie 2.1 to crazyflie 2.1 brushless
 make
 make cload

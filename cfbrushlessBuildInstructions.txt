@@ -1,0 +1,5 @@
+make clean
+make cf21bl_defconfig
+make menuconfig (if needed)
+make
+make cload

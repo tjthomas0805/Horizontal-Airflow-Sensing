@@ -1,0 +1,175 @@
+import time
+import os
+import keyboard
+from datetime import datetime
+from threading import Thread
+import csv
+import cflib.crtp
+from CFLogger import *
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.platformservice import PlatformService
+from cflib.positioning.motion_commander import MotionCommander
+from cflib.crazyflie.log import LogConfig
+import numpy as np
+
+# === CONFIGURATION ===
+URI = 'radio://0/80/2M/E7E7E7E7E7'   # <-- change if needed
+directory_path = r"C:\Users\bridg\OneDrive\Documents\Research\ICRA26\Turn_Test_Data"
+base_filename = "turnTest"
+file_extension = ".csv"
+
+# Speeds for square flights (m/s)
+SPEEDS = [0.5]
+SIDE_DISTANCE = 3.0  # meters
+HEIGHT = 0.8       # takeoff height
+
+# PID Controller Variables
+Kp = 0.6
+Ki = 0
+Kd = 0.08
+integral = 0
+previous_error = 0
+previous_time = 0
+current_time = 0
+
+# Drone Variables
+drone_heading = 0
+
+# Navigation Vars
+min_flow_threshold = 7
+angle_threshold = 10
+desired_flow_angle = 180
+flowMap = []
+
+# === FILE HANDLING ===
+def get_log_filename():
+    file_number = 1
+    while True:
+        csv_filename = f"{base_filename}{file_number}{file_extension}"
+        full_path = os.path.join(directory_path, csv_filename)
+        if not os.path.exists(full_path):
+            return full_path
+        file_number += 1
+
+# === HELPER FUNCTIONS ===
+
+
+
+# Hover & Turn
+def dynamicTurn(mc, logger):
+    global previous_error, integral, previous_time, current_time, drone_heading, flowMap, desired_flow_angle, min_flow_threshold, angle_threshold, Kp, Ki, Kd, last_error
+    while True:
+        if logger.calibrated:  # Ensure the sensor is calibrated
+            print(f"Bx: {logger.latest_bx:.2f}, By: {logger.latest_by:.2f}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}, Flow Magnitude: {logger.flowMag}")
+
+            while logger.flowMag >= min_flow_threshold:
+                #print(f"Flow angle at: {logger.flowAngle}, Flow Magnitude is: {logger.flowMag}")
+                flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+                error = desired_flow_angle - logger.flowAngle
+                current_time = logger.microsecond
+                if previous_time is None or previous_time == 0: previous_time = current_time - 0.1
+                delta_time = current_time - previous_time
+                integral += error * delta_time
+                turn_command = int(Kp * error + Ki * integral)
+                previous_error = error
+                previous_time = current_time
+
+                if abs(error) <= angle_threshold:  # if error is within desired threshold, hover
+                    print(f"Within Threshold. Moving towards detected flow at {logger.flowAngle} degrees with a magnitude of {logger.flowMag}")
+                    mc.stop() # Start Non-Blocking Turn
+                    time.sleep(0.05)
+                    flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+
+                    # csv_writer.writerow(
+                    #     [time.strftime("%Y-%m-%d %H:%M:%S"), avg_x, avg_y, sourceAngle, sensorMagnitude, 0, error, 2])
+                    time.sleep(0.02)
+
+                elif (270 <= logger.flowAngle <= 360) or ((desired_flow_angle + angle_threshold) <= logger.flowAngle <= 270):
+                    right_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                    right_command = max(min(right_command, 1.0), 0)  # Scale to Crazyflie range
+                    print(f"Turning left, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error: {error} ; command:{right_command}")
+                    mc.start_turn_left(right_command * 90)  # Convert to appropriate angular rate
+                    time.sleep(0.05)
+                    flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+
+                    # csv_writer.writerow(
+                    #     [time.strftime("%Y-%m-%d %H:%M:%S"), avg_x, avg_y, sourceAngle, sensorMagnitude, right_command,
+                    #     error, 1])
+                    
+
+                elif (90 <= logger.flowAngle <= (desired_flow_angle - angle_threshold)) or (0 <= logger.flowAngle <= 90):
+                    left_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                    left_command = max(min(left_command, 1.0), 0)  # Scale to Crazyflie range
+                    left_command = abs(left_command)  # Make positive for turn_left function
+                    print(f"Turning right, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error:{error} ; command:{left_command}")
+                    mc.start_turn_right(left_command * 90)  # Convert to appropriate angular rate
+                    time.sleep(0.05)
+                    flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+                    # csv_writer.writerow(
+                    #     [time.strftime("%Y-%m-%d %H:%M:%S"), avg_x, avg_y, sourceAngle, sensorMagnitude, left_command,
+                    #     error, 1])
+
+                last_error = error
+        else:
+            print("Calibrating...")
+            time.sleep(0.2)
+
+# === MAIN PROGRAM ===
+if __name__ == '__main__':
+    cflib.crtp.init_drivers(enable_debug_driver=False)
+
+    log_path = get_log_filename()
+
+    with open(log_path, mode="w", newline='') as csv_file:
+        fieldnames = [
+            "Month","Day","Hour","Minute","Second","Microsecond",
+            "Speed","Vx","Vy","PosX","PosY","PosZ","Bx","By", "Flow Mag","Flow Angle"
+        ]
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+
+        with SyncCrazyflie(URI, cf=Crazyflie(rw_cache='./cache')) as scf:
+            cf = scf.cf
+            platform = PlatformService(crazyflie=cf)
+
+            print("Connected — sending ARM request…")
+            platform.send_arming_request(True)
+            print("Armed! (but not taking off)")
+
+            logger = LoggerThread(cf, writer)
+            logger.start()
+            mc = MotionCommander(scf, default_height=HEIGHT)
+
+            # -- KILLSWITCH HANDLER 
+            def killswitch():
+                print("\nESC pressed! Landing immediately...")
+                mc.stop()
+                time.sleep(0.05)
+                mc.land()
+                time.sleep(5)
+                platform.send_arming_request(False)
+                print("Disarmed. Exiting program.")
+                os._exit(0)  # Force exit immediately
+
+            keyboard.add_hotkey('esc', killswitch)
+
+            # -- TAKE OFF
+            print("Taking off...")
+            mc.take_off(HEIGHT)
+            time.sleep(2)
+            
+            
+            try:
+                dynamicTurn(mc, logger)
+                    
+            except KeyboardInterrupt:
+                print("\nStopping logging...")
+                logger.running = False
+                logger.join()
+
+
+
+            print("Sending DISARM request…")
+            platform.send_arming_request(False)
+            print("Disarmed. Exiting program.")

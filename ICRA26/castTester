@@ -16,8 +16,8 @@ import numpy as np
 
 # === CONFIGURATION ===
 URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
-directory_path = r"C:\Users\ltjth\Documents\Research\VelocityLogs"
-base_filename = "surgeTest"
+directory_path = r"C:\Users\bridg\OneDrive\Documents\Research\ICRA26\Flow_Discovery_Data"
+base_filename = "castTest"
 file_extension = ".csv"
 
 # Speeds for square flights (m/s)
@@ -46,9 +46,11 @@ flowMap = []
 
 # Wind source navigation parameters
 SEARCH_SPEED = 0.3
+SEARCH_SPEED_X = 0.3
+SEARCH_SPEED_Y = 0.6
 APPROACH_SPEED = 1
-APPROACH_SPEED_X = 0.4
-APPROACH_SPEED_Y = 0.7
+APPROACH_SPEED_X = 0.5
+APPROACH_SPEED_Y = 1
 MAX_FLOW_THRESHOLD = 70  # When to consider we've reached the source
 TURN_RATE = 45  # degrees/second for turning towards source
 
@@ -130,10 +132,10 @@ def alternative_turn_and_surge(mc, logger):
 
 def flowDiscovery(mc, logger):
     # Search for wind
-    search_for_wind(mc, logger)
+    crosswindCast(mc, logger)
 
     # Move in Zig-Zag pattern across wind
-    crosswindCast(mc, logger) 
+    approach_wind_source(mc, logger) 
 
 
 
@@ -146,6 +148,7 @@ def search_for_wind(mc, logger):
 
     while logger.flowMag < min_flow_threshold:
         print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
+        flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
         mc.start_forward(SEARCH_SPEED)
         time.sleep(0.1)
 
@@ -169,7 +172,7 @@ def approach_wind_source(mc, logger):
 
         # Calculate wind source direction (opposite to flow direction)
         source_angle = (logger.flowAngle + 180) % 360
-        np.gradient(flowMap[:][0:3])
+        #np.gradient(flowMap[:][0:3])
         flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
         # Convert to velocity components (NED frame)
         # 0° = North, 90° = East, 180° = South, 270° = West
@@ -196,6 +199,37 @@ def approach_wind_source(mc, logger):
 
 
 def crosswindCast(mc, logger):
+    """
+    Search phase - move forward slowly until wind is detected
+    """
+    print("Searching for wind...")
+
+    while logger.flowMag < min_flow_threshold:
+        current_time = time.time()
+        elapsed_time = 0
+        while elapsed_time < 2 and logger.flowMag < min_flow_threshold:
+            mc.start_linear_motion(APPROACH_SPEED_X, APPROACH_SPEED_Y, 0)
+            print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
+        mc.stop()
+        time.sleep(0.1)            
+        while elapsed_time < 4 and logger.flowMag < min_flow_threshold:
+            mc.start_linear_motion(APPROACH_SPEED_X, -APPROACH_SPEED_Y, 0)
+            print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
+        mc.stop()
+        time.sleep(0.1)    
+        while elapsed_time < 2 and logger.flowMag < min_flow_threshold:
+            mc.start_linear_motion(APPROACH_SPEED_X, APPROACH_SPEED_Y, 0)
+            print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
+        mc.stop()
+        time.sleep(0.1)    
+        
+
+    print(f"Wind detected! Magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    time.sleep(0.2)
+
+
+def crosswindSurge(mc, logger):
     global flowMap
     """
     Approach phase - navigate towards wind source using flow direction
@@ -210,7 +244,7 @@ def crosswindCast(mc, logger):
 
         # Calculate wind source direction (opposite to flow direction)
         source_angle = (logger.flowAngle + 180) % 360
-        np.gradient(flowMap[:][0:3])
+        #np.gradient(flowMap[:][0:3])
         flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
         # Convert to velocity components (NED frame)
         # 0° = North, 90° = East, 180° = South, 270° = West
@@ -224,20 +258,20 @@ def crosswindCast(mc, logger):
         # Move towards source in Zig-Zag pattern
         if logger.flowMag > min_flow_threshold:
             mc.start_linear_motion(vx, -vy, 0)
-            time.sleep(3)
-            mc.start_linear_motion(vx, -vy, 0)
-            time.sleep(6)
+            time.sleep(2)
             mc.start_linear_motion(vx, vy, 0)
-            time.sleep(3)
+            time.sleep(4)
+            mc.start_linear_motion(vx, -vy, 0)
+            time.sleep(2)
             last_vx = vx
             last_vy = vy
         else:
-            mc.start_linear_motion(last_vx, last_vy, 0)
-            time.sleep(3)
-            mc.start_linear_motion(last_vx, last_vy, 0)
-            time.sleep(6)
-            mc.start_linear_motion(vx, vy, 0)
-            time.sleep(3)
+            mc.start_linear_motion(last_vx, -last_vy, 0)
+            time.sleep(2)
+            mc.start_linear_motion(last_vx, -last_vy, 0)
+            time.sleep(4)
+            mc.start_linear_motion(last_vx, -last_vy, 0)
+            time.sleep(2)
 
     print(f"Reached wind source! Flow magnitude: {logger.flowMag:.2f}")
     mc.stop()
@@ -280,7 +314,6 @@ if __name__ == '__main__':
             # Initialize motion commander
             mc = MotionCommander(scf, default_height=HEIGHT)
 
-
             # Killswitch handler
             def killswitch():
                 print("\nESC pressed! Landing immediately...")
@@ -292,7 +325,6 @@ if __name__ == '__main__':
                 logger.running = False
                 print("Disarmed. Exiting program.")
                 os._exit(0)
-
 
             # Take off
             print("Taking off...")

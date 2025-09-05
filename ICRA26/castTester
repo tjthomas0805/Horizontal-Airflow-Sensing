@@ -1,0 +1,337 @@
+import logging
+import time
+import os
+import csv
+from datetime import datetime
+from threading import Thread
+import keyboard
+import cflib.crtp
+from CFLogger import *
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.platformservice import PlatformService
+from cflib.positioning.motion_commander import MotionCommander
+from cflib.crazyflie.log import LogConfig
+import numpy as np
+
+# === CONFIGURATION ===
+URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
+directory_path = r"C:\Users\ltjth\Documents\Research\VelocityLogs"
+base_filename = "surgeTest"
+file_extension = ".csv"
+
+# Speeds for square flights (m/s)
+SPEEDS = [0.5]
+SIDE_DISTANCE = 3.0  # meters
+HEIGHT = 0.8  # takeoff height
+
+# PID Controller Variables
+Kp = 0.6
+Ki = 0
+Kd = 0.08
+integral = 0
+previous_error = 0
+previous_time = 0
+current_time = 0
+
+# Drone Variables
+drone_heading = 0
+
+# Navigation Vars
+min_flow_threshold = 8
+angle_threshold = 10
+desired_flow_angle = 180
+flowMap = []
+#once you detect flow add these as a tuple to flowMap
+
+# Wind source navigation parameters
+SEARCH_SPEED = 0.3
+APPROACH_SPEED = 1
+APPROACH_SPEED_X = 0.4
+APPROACH_SPEED_Y = 0.7
+MAX_FLOW_THRESHOLD = 70  # When to consider we've reached the source
+TURN_RATE = 45  # degrees/second for turning towards source
+
+
+# === FILE HANDLING ===
+def get_log_filename():
+    file_number = 1
+    while True:
+        csv_filename = f"{base_filename}{file_number}{file_extension}"
+        full_path = os.path.join(directory_path, csv_filename)
+        if not os.path.exists(full_path):
+            return full_path
+        file_number += 1
+
+
+
+# === NAVIGTION MODES ===
+def navigate_to_wind_source(mc, logger):
+    """
+    Main navigation function to find and approach wind source
+    """
+    print("Starting wind source navigation...")
+
+    # Phase 1: Search for wind
+    search_for_wind(mc, logger)
+
+    # Phase 2: Navigate towards source
+    approach_wind_source(mc, logger)
+
+
+def alternative_turn_and_surge(mc, logger):
+    """
+    Alternative approach using turning and surging
+    """
+    print("Using turn-and-surge approach...")
+
+    while logger.flowMag < MAX_FLOW_THRESHOLD:
+        if logger.flowMag < min_flow_threshold:
+            print("No wind detected, searching...")
+            mc.start_forward(SEARCH_SPEED)
+            time.sleep(0.1)
+            continue
+
+        # Calculate error - we want to face opposite to flow direction
+        target_heading = (logger.flowAngle + 180) % 360
+        current_heading = 0  # We don't have heading sensor, so assume 0 = North
+
+        # Calculate shortest angular distance
+        error = target_heading - current_heading
+        if error > 180:
+            error -= 360
+        elif error < -180:
+            error += 360
+
+        print(f"Flow: {logger.flowMag:.2f} @ {logger.flowAngle:.1f}° | "
+                f"Target heading: {target_heading:.1f}° | Error: {error:.1f}°")
+
+        # If aligned with source, surge forward
+        if abs(error) < angle_threshold:
+            print("Aligned with source, surging forward...")
+            mc.start_forward(APPROACH_SPEED)
+        else:
+            # Turn towards source
+            turn_speed = min(abs(error) / 180 * TURN_RATE, TURN_RATE)
+            if error > 0:
+                print(f"Turning left at {turn_speed:.1f}°/s")
+                mc.start_turn_left(turn_speed)
+            else:
+                print(f"Turning right at {turn_speed:.1f}°/s")
+                mc.start_turn_right(turn_speed)
+
+        time.sleep(0.1)
+
+    print(f"Reached wind source! Flow magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    mc.start_down(0.3)
+    mc.land()
+
+
+def flowDiscovery(mc, logger):
+    # Search for wind
+    search_for_wind(mc, logger)
+
+    # Move in Zig-Zag pattern across wind
+    crosswindCast(mc, logger) 
+
+
+
+# === HELPER FUNCTIONS ===
+def search_for_wind(mc, logger):
+    """
+    Search phase - move forward slowly until wind is detected
+    """
+    print("Searching for wind...")
+
+    while logger.flowMag < min_flow_threshold:
+        print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
+        mc.start_forward(SEARCH_SPEED)
+        time.sleep(0.1)
+
+    print(f"Wind detected! Magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    time.sleep(0.2)
+
+
+def approach_wind_source(mc, logger):
+    global flowMap
+    """
+    Approach phase - navigate towards wind source using flow direction
+    """
+    print("Approaching wind source...")
+
+    while logger.flowMag < MAX_FLOW_THRESHOLD:
+        if logger.flowMag < min_flow_threshold:
+            print("Lost wind signal, resuming search...")
+            search_for_wind(mc, logger)
+            continue
+
+        # Calculate wind source direction (opposite to flow direction)
+        source_angle = (logger.flowAngle + 180) % 360
+        np.gradient(flowMap[:][0:3])
+        flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+        # Convert to velocity components (NED frame)
+        # 0° = North, 90° = East, 180° = South, 270° = West
+        vx = APPROACH_SPEED * np.cos(np.radians(source_angle))  # North component
+        vy = APPROACH_SPEED * np.sin(np.radians(source_angle))  # East component
+
+        print(f"Flow: {logger.flowMag:.2f} @ {logger.flowAngle:.1f}° | "
+              f"Source: {source_angle:.1f}° | "
+              f"Velocity: vx={vx:.2f}, vy={vy:.2f}")
+
+        # Move towards source
+        mc.start_linear_motion(vx, vy, 0)
+        time.sleep(0.1)
+
+    print(f"Reached wind source! Flow magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    time.sleep(1)
+
+    # Land at source
+    print("Landing at wind source...")
+    mc.start_down(0.3)
+    time.sleep(2)
+    mc.land()
+
+
+def crosswindCast(mc, logger):
+    global flowMap
+    """
+    Approach phase - navigate towards wind source using flow direction
+    """
+    print("Approaching wind source...")
+
+    while logger.flowMag < MAX_FLOW_THRESHOLD:
+        if logger.flowMag < min_flow_threshold:
+            #print("Lost wind signal, resuming search...")
+            #search_for_wind(mc, logger)
+            continue
+
+        # Calculate wind source direction (opposite to flow direction)
+        source_angle = (logger.flowAngle + 180) % 360
+        np.gradient(flowMap[:][0:3])
+        flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
+        # Convert to velocity components (NED frame)
+        # 0° = North, 90° = East, 180° = South, 270° = West
+        vx = APPROACH_SPEED_X * np.cos(np.radians(source_angle))  # North component
+        vy = APPROACH_SPEED_Y * np.sin(np.radians(source_angle))  # East component
+
+        print(f"Flow: {logger.flowMag:.2f} @ {logger.flowAngle:.1f}° | "
+              f"Source: {source_angle:.1f}° | "
+              f"Velocity: vx={vx:.2f}, vy={vy:.2f}")
+
+        # Move towards source in Zig-Zag pattern
+        if logger.flowMag > min_flow_threshold:
+            mc.start_linear_motion(vx, -vy, 0)
+            time.sleep(3)
+            mc.start_linear_motion(vx, -vy, 0)
+            time.sleep(6)
+            mc.start_linear_motion(vx, vy, 0)
+            time.sleep(3)
+            last_vx = vx
+            last_vy = vy
+        else:
+            mc.start_linear_motion(last_vx, last_vy, 0)
+            time.sleep(3)
+            mc.start_linear_motion(last_vx, last_vy, 0)
+            time.sleep(6)
+            mc.start_linear_motion(vx, vy, 0)
+            time.sleep(3)
+
+    print(f"Reached wind source! Flow magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    time.sleep(1)
+
+    # Land at source
+    print("Landing at wind source...")
+    mc.start_down(0.3)
+    time.sleep(2)
+    mc.land()
+  
+
+
+# === MAIN PROGRAM ===
+if __name__ == '__main__':
+    cflib.crtp.init_drivers(enable_debug_driver=False)
+    log_path = get_log_filename()
+
+    with open(log_path, mode="w", newline='') as csv_file:
+        fieldnames = [
+            "Month", "Day", "Hour", "Minute", "Second", "Microsecond",
+            "Speed", "Vx", "Vy", "PosX", "PosY", "PosZ", "Bx", "By",
+            "Flow Mag", "Flow Angle"
+        ]
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+
+        with SyncCrazyflie(URI, cf=Crazyflie(rw_cache='./cache')) as scf:
+            cf = scf.cf
+            platform = PlatformService(crazyflie=cf)
+
+            print("Connected — sending ARM request…")
+            platform.send_arming_request(True)
+            print("Armed! (but not taking off)")
+
+            # Start logging thread
+            logger = LoggerThread(cf, writer)
+            logger.start()
+
+            # Initialize motion commander
+            mc = MotionCommander(scf, default_height=HEIGHT)
+
+
+            # Killswitch handler
+            def killswitch():
+                print("\nESC pressed! Landing immediately...")
+                #mc.stop()
+                mc.start_down(0.3)
+                mc.land()
+                time.sleep(5)
+                platform.send_arming_request(False)
+                logger.running = False
+                print("Disarmed. Exiting program.")
+                os._exit(0)
+
+
+            # Take off
+            print("Taking off...")
+            mc.take_off(HEIGHT)
+            time.sleep(2)
+
+            # Set up killswitch
+            keyboard.add_hotkey('esc', killswitch)
+
+            try:
+                # Wait for calibration
+                while not logger.calibrated:
+                    print("Waiting for calibration...")
+                    time.sleep(1)
+
+                print("Calibrated! Starting wind source navigation...")
+                time.sleep(2)
+
+                # ===== CHOOSE NAVIGATION MODE =====
+
+                # Method 1: Direct velocity control (recommended)
+                #navigate_to_wind_source(mc, logger)
+
+                # Method 2: Turn and surge (alternative)
+                #alternative_turn_and_surge(mc, logger)
+
+                # Method 3: Flow discovery (for general flow mapping)
+                flowDiscovery(mc, logger)
+
+            except KeyboardInterrupt:
+                print("\nStopping...")
+                mc.stop()
+                mc.land()
+
+            finally:
+                print("Stopping logging...")
+                logger.running = False
+                logger.join()
+
+                print("Sending DISARM request…")
+                platform.send_arming_request(False)
+                print("Disarmed. Program complete.")

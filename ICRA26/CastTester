@@ -278,11 +278,18 @@ def alternative_turn_and_surge(mc, logger):
 
 def flowDiscovery(mc, logger):
     # Search for wind
-    crosswindCast(mc, logger)
-
+    #crosswindCast(mc, logger)
+    search_for_wind(mc, logger)
     # Move in Zig-Zag pattern across wind
     approach_wind_source(mc, logger) 
 
+
+def spiralSearch(mc, logger): 
+    # Do Spiral Motions to  search for wind
+    spiralCast(mc, logger)
+
+    # Go Towards Flow once Detected
+    approach_wind_source(mc, logger)
 
 
 # === HELPER FUNCTIONS ===
@@ -358,21 +365,21 @@ def crosswindCast(mc, logger):
             print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
             elapsed_time = time.time() - current_time
         mc.stop()
-        time.sleep(0.1)
+        time.sleep(0.01)
         elapsed_time = 0            
         while elapsed_time < 3 and logger.flowMag < min_flow_threshold:
             mc.start_linear_motion(SEARCH_SPEED_X, -SEARCH_SPEED_Y, 0)
             print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
             elapsed_time = time.time() - current_time
         mc.stop()
-        time.sleep(0.1)
+        time.sleep(0.01)
         elapsed_time = 0    
         while elapsed_time < 2 and logger.flowMag < min_flow_threshold:
             mc.start_linear_motion(SEARCH_SPEED_X, SEARCH_SPEED_Y, 0)
             print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing search...")
             elapsed_time = time.time() - current_time
         mc.stop()
-        time.sleep(0.1)    
+        time.sleep(0.01)    
         
 
     print(f"Wind detected! Magnitude: {logger.flowMag:.2f}")
@@ -434,7 +441,38 @@ def crosswindSurge(mc, logger):
     time.sleep(2)
     mc.land()
   
+def spiralCast(mc, logger):
+    """
+    Search phase - move in an expanding spiral until wind is detected
+    """
+    print("Searching for wind with spiral cast...")
 
+    radius = 0.5  # initial radius
+    angle = 0
+    angle_increment = 10  # degrees
+    radius_increment = 0.1  # meters
+
+    while logger.flowMag < min_flow_threshold:
+        # Calculate target position in spiral
+        rad_angle = np.radians(angle)
+        target_x = radius * np.cos(rad_angle)
+        target_y = radius * np.sin(rad_angle)
+
+        # Move to target position
+        mc.start_linear_motion(target_x, target_y, 0)
+        time.sleep(0.5)  # Adjust time to control speed
+
+        # Update angle and radius for next point in spiral
+        angle += angle_increment
+        if angle >= 360:
+            angle = angle % 360
+            radius += radius_increment
+
+        print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing spiral search...")
+
+    print(f"Wind detected! Magnitude: {logger.flowMag:.2f}")
+    mc.stop()
+    time.sleep(0.2)
 
 # === MAIN PROGRAM ===
 if __name__ == '__main__':
@@ -469,6 +507,7 @@ if __name__ == '__main__':
             def killswitch():
                 print("\nESC pressed! Landing immediately...")
                 #mc.stop()
+                mc.stop()
                 mc.start_down(0.3)
                 mc.land()
                 time.sleep(5)
@@ -503,7 +542,10 @@ if __name__ == '__main__':
                 #alternative_turn_and_surge(mc, logger)
 
                 # Method 3: Flow discovery (for general flow mapping)
-                flowDiscovery(mc, logger)
+                #flowDiscovery(mc, logger)
+
+                #Method 4: Spiral Search then Approach
+                spiralSearch(mc, logger)
 
             except KeyboardInterrupt:
                 print("\nStopping...")

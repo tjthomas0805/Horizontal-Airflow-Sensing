@@ -59,6 +59,10 @@ TURN_RATE = 45  # degrees/second for turning towards source
 # Cast and Surge Algorithm Parameters
 FORWARD_MOVE_DURATION = 1  # seconds
 CAST_DURATION = 2  # seconds
+CAST_DISTANCE = 2
+
+# Test Parameters
+TEST_DISTANCE = 1.5  # meters for state estimator test
 
 
 
@@ -113,6 +117,13 @@ class LoggerThread(Thread):
         self.latest_by = 0.0
         self.flowAngle = 0.0
         self.flowMag = 0.0
+        self.gas_con = 0
+
+        # Drone Multiranger variables
+        self.range_front = 0.0
+        self.range_back = 0.0
+        self.range_left = 0.0
+        self.range_right = 0.0
 
     def moving_average_angle(self, new_angle):
         """Apply moving average filter to angle measurements"""
@@ -136,6 +147,12 @@ class LoggerThread(Thread):
         log_conf.add_variable('stateEstimate.z', 'float')
         log_conf.add_variable('windSensor.flowX', 'int16_t')
         log_conf.add_variable('windSensor.flowY', 'int16_t')
+        log_conf.add_variable('windSensor.gas', 'int16_t')
+        log_conf.add_variable('range.front', 'float')
+        log_conf.add_variable('range.back', 'float')
+        log_conf.add_variable('range.left', 'float')
+        log_conf.add_variable('range.right', 'float')
+    
 
         def log_data(timestamp, data, logconf):
             bx = data['windSensor.flowX']
@@ -175,6 +192,13 @@ class LoggerThread(Thread):
             # Update flow measurements
             self.latest_bx = bx_cal
             self.latest_by = by_cal
+            self.gas_con = data['windSensor.gas']
+
+            # Drone Multiranger readings
+            self.range_front = data['range.front']
+            self.range_back = data['range.back']
+            self.range_left = data['range.left']
+            self.range_right = data['range.right']
 
             # Calculate flow angle and magnitude
             raw_angle = (np.arctan2(by_cal, bx_cal) * (180 / np.pi))-180 % 360
@@ -199,7 +223,8 @@ class LoggerThread(Thread):
                     "Bx": bx_cal,
                     "By": by_cal,
                     "Flow Mag": self.flowMag,
-                    "Flow Angle": self.flowAngle
+                    "Flow Angle": self.flowAngle,
+                    "Gas Concentration": data['windSensor.gas'],
                 })
 
         def log_error(logconf, msg):
@@ -300,22 +325,49 @@ def spiralSearch(mc, logger):
     spiralSurge(mc, logger)
 
 
+# === Capability Test Functions ===
+
 def spiralTest(mc, logger):
     # Testing Spiral Motion
+    print("Starting spiral motion test...")
     spiralMove(mc, logger) 
 
 
 def stateEstimatorTest(mc, logger):
     # Testing State Estimator
+    print("Starting state estimator test...")
     startX = logger.droneX
     startY = logger.droneY
-    while startX < startX + 3:  # Go for 3 meters in X direction
+    while startX < TEST_DISTANCE:  # Go for 3 meters in X direction
         mc.start_forward(0.4)
         print(f"Position: X={logger.droneX:.2f}, Y={logger.droneY:.2f} | "
               f"Velocity: Vx={logger.droneVX:.2f}, Vy={logger.droneVY:.2f}")
         time.sleep(1)
     mc.stop()
     print("Destination reached. Landing...")
+
+
+def multirangerTest(mc, logger):
+    # Testing Multiranger (Obstacle Avoidance)
+    print("Starting multiranger test...")
+    startPosX = logger.droneX
+    startPosY = logger.droneY
+    angleFromStart = 0
+    while logger.range_front > 0.5:
+        mc.start_forward(0.3)
+    mc.stop()
+    while logger.range_back > 0.5:
+        mc.start_backward(0.3)
+    mc.stop()
+    while logger.range_left > 0.5 or logger.range_forward > 0.5:
+        mc.start_linear_motion(0.3, 0.3, 0)
+    mc.stop()
+    while logger.droneX > startPosX and logger.droneY > startPosY:
+        mc.start_linear_motion(-0.3, -0.3, 0)
+    mc.stop()
+    time.sleep(1)
+    mc.land()
+
 
 # === INITIAL FLOW DISCOVERY FUNCTIONS ===
 
@@ -419,7 +471,8 @@ def spiralCast(mc, logger):
             angle = angle % 360
             radius += radius_increment
         print(f"No wind detected (mag: {logger.flowMag:.2f}), continuing spiral search...")
-
+    
+    LOCAL_MAX_FLOW = logger.flowMag
     print(f"Wind detected! Magnitude: {logger.flowMag:.2f}")
     mc.stop()
     time.sleep(0.2)
@@ -436,21 +489,21 @@ def unilateralCast(mc, logger):
         flowMap.append((logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
         
         # Cast Left
-        start_time = time.time()
-        elapsed_time = 0
-        while elapsed_time < CAST_DURATION:
+        startPosX = logger.droneX
+        startPosY = logger.droneY
+        while logger.droneY < CAST_DISTANCE + startPosY:
             mc.start_linear_motion(0, SEARCH_SPEED_Y, 0)
-            elapsed_time = time.time() - start_time
+            time.sleep(0.1)
         mc.stop()
 
         # Cast Right
-        elapsed_time = 0
-        time.sleep(0.5)
-        start_time = time.time()
-        while elapsed_time < CAST_DURATION:
+        startPosX = logger.droneX
+        startPosY = logger.droneY
+        while logger.droneY > -CAST_DISTANCE + startPosY:
             mc.start_linear_motion(0, -SEARCH_SPEED_Y, 0)
-            elapsed_time = time.time() - start_time
+            time.sleep(0.1)
         mc.stop()
+
         FORWARD_MOVE_DURATION += 1
         CAST_DURATION += 1
 
@@ -554,6 +607,9 @@ def spiralSurge(mc, logger):
     print("Approaching wind source...")
 
     while logger.flowMag < MAX_FLOW_THRESHOLD:
+        if logger.flowMag > LOCAL_MAX_FLOW:
+            LOCAL_MAX_FLOW = logger.flowMag
+
         if logger.flowMag < min_flow_threshold:
             print("Lost wind signal, resuming search...")
             spiralCast(mc, logger)
@@ -682,26 +738,10 @@ if __name__ == '__main__':
             # Initialize motion commander
             mc = MotionCommander(scf, default_height=HEIGHT)
 
-            # Killswitch handler
-            def killswitch():
-                print("\nESC pressed! Landing immediately...")
-                #mc.stop()
-                mc.stop()
-                mc.start_down(0.3)
-                mc.land()
-                time.sleep(5)
-                platform.send_arming_request(False)
-                logger.running = False
-                print("Disarmed. Exiting program.")
-                os._exit(0)
-
             # Take off
             print("Taking off...")
             mc.take_off(HEIGHT)
             time.sleep(2)
-
-            # Set up killswitch
-            keyboard.add_hotkey('esc', killswitch)
 
             try:
                 # Wait for calibration
@@ -731,17 +771,18 @@ if __name__ == '__main__':
 
                 # Method 6: State Estimator Test (No Wind Navigation)
                 #stateEstimatorTest(mc, logger)
-                
-            except KeyboardInterrupt:
-                print("\nStopping...")
-                mc.stop()
-                mc.land()
+
+                # Method 7: Multiranger Test (Obstacle Avoidance Test)
+                #multirangerTest(mc, logger)
 
             finally:
                 print("Stopping logging...")
                 logger.running = False
                 logger.join()
-
+                mc.stop()
+                time.sleep(1)
+                mc.land()
+                time.sleep(3)
                 print("Sending DISARM request…")
                 platform.send_arming_request(False)
                 print("Disarmed. Program complete.")

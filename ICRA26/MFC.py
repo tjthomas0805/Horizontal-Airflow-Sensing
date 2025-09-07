@@ -284,14 +284,6 @@ def alternative_turn_and_surge(mc, logger):
     mc.land()
 
 
-def flowDiscovery(mc, logger):
-    # Search for wind
-    #crosswindCast(mc, logger)
-    search_for_wind(mc, logger)
-    # Move in Zig-Zag pattern across wind
-    approach_wind_source(mc, logger) 
-
-
 def cast_and_surge(mc, logger):
     # Do Zig-Zag Motions to search for wind
     seek_and_turn(mc, logger)
@@ -308,6 +300,22 @@ def spiralSearch(mc, logger):
     spiralSurge(mc, logger)
 
 
+def spiralTest(mc, logger):
+    # Testing Spiral Motion
+    spiralMove(mc, logger) 
+
+
+def stateEstimatorTest(mc, logger):
+    # Testing State Estimator
+    startX = logger.droneX
+    startY = logger.droneY
+    while startX < startX + 3:  # Go for 3 meters in X direction
+        mc.start_forward(0.4)
+        print(f"Position: X={logger.droneX:.2f}, Y={logger.droneY:.2f} | "
+              f"Velocity: Vx={logger.droneVX:.2f}, Vy={logger.droneVY:.2f}")
+        time.sleep(1)
+    mc.stop()
+    print("Destination reached. Landing...")
 
 # === INITIAL FLOW DISCOVERY FUNCTIONS ===
 
@@ -622,7 +630,28 @@ def turnToSource(mc, logger):
             
         last_error = error
 
+def spiralMove(mc, logger):
+    radius = 0.5  # initial radius
+    angle = 0
+    angle_increment = 10  # degrees
+    radius_increment = 0.1  # meters
 
+    while angle < 720:  # Two full rotations
+        # Calculate target position in spiral
+        rad_angle = np.radians(angle)
+        target_x = radius * np.cos(rad_angle)
+        target_y = radius * np.sin(rad_angle)
+
+        # Move to target position
+        mc.start_linear_motion(target_x, target_y, 0)
+        time.sleep(0.3)  # Adjust time to control speed
+
+        # Update angle and radius for next point in spiral
+        angle += angle_increment
+        if angle >= 360:
+            angle = angle % 360
+            radius += radius_increment
+        print(f"Spiral moving... Current angle: {angle}°, radius: {radius}m")
 
 # === MAIN PROGRAM ===
 if __name__ == '__main__':
@@ -691,8 +720,8 @@ if __name__ == '__main__':
                 # Method 2: Turn and surge (alternative)
                 #alternative_turn_and_surge(mc, logger)
 
-                # Method 3: Flow discovery (for general flow mapping)
-                #flowDiscovery(mc, logger)
+                # Method 3: Spiral Test (Spiral Motion Only Test)
+                # spiralTest(mc, logger)
 
                 # Method 4: Spiral Search then Approach (Alternative Algorithm)
                 spiralSearch(mc, logger)
@@ -700,6 +729,9 @@ if __name__ == '__main__':
                 # Method 5: Cast and Surge (Alternative Algorithm)
                 #cast_and_surge(mc, logger)
 
+                # Method 6: State Estimator Test (No Wind Navigation)
+                #stateEstimatorTest(mc, logger)
+                
             except KeyboardInterrupt:
                 print("\nStopping...")
                 mc.stop()

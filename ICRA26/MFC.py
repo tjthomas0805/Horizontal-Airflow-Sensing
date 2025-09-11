@@ -992,13 +992,14 @@ def return_to_last_flow(mc, logger):
         print("No flow data available to return to.")
         return
 
-    flow = flowMap[-200:]  # Last 200 points
+    flow = flowMap[-400:]  # Last 200 points
     last_flow_entry = None
-
-    for entry in reversed(flow):
-        if entry[4] >= min_flow_threshold:  # entry[2] is flowMag
-            last_flow_entry = entry
-            break
+    last_flow_entry = max(flow, key=lambda entry: entry[4])  # entry[4] is flowMag
+    # for entry in reversed(flow):
+    #     if entry[4] >= min_flow_threshold:  # entry[2] is flowMag
+    #
+    #         last_flow_entry = entry
+    #         break
 
     target_x, target_y, bx, by, flowMag, flowAngle = last_flow_entry
 
@@ -1008,7 +1009,7 @@ def return_to_last_flow(mc, logger):
     # Move relative to current position (XY only for now)
     mc.move_distance(target_x - logger.droneX, target_y - logger.droneY, 0.0, APPROACH_SPEED_X)
 
-    time.sleep(2)
+    time.sleep(5)
     print(f"Current position: ({logger.droneX:.2f}, {logger.droneY:.2f})")
 # def return_to_last_flow(mc, logger):
 #     global flowMap
@@ -1149,7 +1150,7 @@ def checkRangers(logger):
     print(logger.range_front, logger.range_back, logger.range_left, logger.range_right)
     if logger.range_front < MIN_RANGER_DISTANCE:
         raise InterruptedError("Obstacle detected in front! Stopping forward motion.")
-    if logger.range_back < MIN_RANGER_DISTANCE:
+    if logger.range_back < 50:
         raise InterruptedError("Obstacle detected in back! Stopping backward motion.")
     if logger.range_left < MIN_RANGER_DISTANCE:
         raise InterruptedError("Obstacle detected on right! Stopping leftward motion.")

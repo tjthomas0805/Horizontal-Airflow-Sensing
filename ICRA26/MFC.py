@@ -24,7 +24,7 @@ file_extension = ".csv"
 # Speeds for square flights (m/s)
 SPEEDS = [0.5]
 SIDE_DISTANCE = 3.0  # meters
-HEIGHT = 1  # takeoff height
+HEIGHT = 0.75  # takeoff height
 
 # PID Controller Variables
 Kp = 0.6
@@ -51,7 +51,7 @@ SEARCH_SPEED = 0.3
 SEARCH_SPEED_X = 0.2
 SEARCH_SPEED_Y = 0.4
 SEARCH_DURATION = 0.7  # seconds per search segment
-APPROACH_SPEED = 0.5
+APPROACH_SPEED = 0.35
 APPROACH_SPEED_X = 0.5
 APPROACH_SPEED_Y = 1
 MAX_FLOW_THRESHOLD = 175  # When to consider we've reached the source
@@ -69,11 +69,12 @@ CAST_DISTANCE_Y = 0.6
 TEST_DISTANCE = 1.5  # meters for state estimator test
 
 # Multiranger Parameters
-MIN_RANGER_DISTANCE = 1200
+MIN_RANGER_DISTANCE = 750
   # mm, minimum distance to obstacle
 
 # Gas Sensor Parameters
-GAS_THRESHOLD = 4  # Threshold for gas concentration
+GAS_THRESHOLD = 8  # Threshold for gas concentration
+MAX_GAS_THRESHOLD = 20  # Threshold for gas concentration to consider source reached
 local_gas_concentration = []
 gas_gradients = []
 
@@ -98,7 +99,7 @@ class LoggerThread(Thread):
 
         # Moving average filter for flow angle
         self.angle_window = []
-        self.angle_window_size = 5  # Reduced for faster response
+        self.angle_window_size = 30  # Reduced for faster response
 
         # Calibration parameters
         self.calib_window = 400
@@ -820,7 +821,8 @@ def approach_wind_source(mc, logger):
     """
     print("Approaching wind source...")
 
-    while logger.flowMag < MAX_FLOW_THRESHOLD:
+    while True:
+        checkRangers(logger)
         if logger.flowMag <= min_flow_threshold:
             print("Lost wind signal, resuming search...")
             search_for_wind(mc, logger)
@@ -843,6 +845,10 @@ def approach_wind_source(mc, logger):
         # Move towards source
         checkRangers(logger)
         mc.start_linear_motion(vx, vy, 0)
+        time.sleep(0.1)
+        if logger.gas_con >= MAX_GAS_THRESHOLD:
+            print("Gas threshold reached, stopping movement.")
+            break
 
     print(f"Reached wind source! Flow magnitude: {logger.flowMag:.2f}")
     mc.stop()
@@ -970,6 +976,21 @@ def gradientSurge(mc, logger):
 
 
 # === HELPER FUNCTIONS ===
+
+# Return to last known flow location
+def return_to_last_flow(mc, logger):
+    global flowMap
+    if not flowMap:
+        print("No flow data available to return to.")
+        return
+
+    flow = flowMap[:][15] # Last 200 points
+    last_flow_index = max(flow[-200:-1])
+    target_x, target_y = flow[last_flow_index][0], flow[last_flow_index][1]
+    print(f"Returning to last known flow location at ({target_x:.2f}, {target_y:.2f})")
+    mc.move_distance(target_x - logger.droneX, target_y - logger.droneY, 1.0, 0.5)  # Move to last known flow position
+    time.sleep(2)
+    print(f"Current position: ({logger.droneX:.2f}, {logger.droneY:.2f})")
 
 # Calculate Gradient of Local Gas Concentration
 def calculate_spatial_gradient(positions_concentrations, window_size=200):

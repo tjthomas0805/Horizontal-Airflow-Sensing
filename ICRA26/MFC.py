@@ -13,18 +13,18 @@ from cflib.crazyflie.platformservice import PlatformService
 from cflib.positioning.motion_commander import MotionCommander
 from cflib.crazyflie.log import LogConfig
 import numpy as np
-from sklearn.linear_model import LinearRegression
+#from sklearn.linear_model import LinearRegression
 
 # === CONFIGURATION ===
 URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
-directory_path = r"C:\Users\bridg\OneDrive\Documents\Research\ICRA26\Turn_Test_Data"
-base_filename = "castTest"
+directory_path = r"C:\Users\ltjth\Documents\Research"
+base_filename = "A_VS_noTurn"
 file_extension = ".csv"
 
 # Speeds for square flights (m/s)
 SPEEDS = [0.5]
 SIDE_DISTANCE = 3.0  # meters
-HEIGHT = 0.75  # takeoff height
+HEIGHT = 0.7  # takeoff height
 
 # PID Controller Variables
 Kp = 0.6
@@ -70,13 +70,14 @@ TEST_DISTANCE = 1.5  # meters for state estimator test
 
 # Multiranger Parameters
 MIN_RANGER_DISTANCE = 750
-  # mm, minimum distance to obstacle
+# mm, minimum distance to obstacle
 
 # Gas Sensor Parameters
 GAS_THRESHOLD = 8  # Threshold for gas concentration
 MAX_GAS_THRESHOLD = 20  # Threshold for gas concentration to consider source reached
 local_gas_concentration = []
 gas_gradients = []
+
 
 # === FILE HANDLING ===
 def get_log_filename():
@@ -106,7 +107,7 @@ class LoggerThread(Thread):
         self.bx_window = []
         self.by_window = []
         self.gas_con_window = []
-        self.gas_con_window_size = 20  # Moving average window for gas concentration   
+        self.gas_con_window_size = 20  # Moving average window for gas concentration
         self.bx_offset = 0
         self.by_offset = 0
         self.gas_con_offset = 0
@@ -158,7 +159,7 @@ class LoggerThread(Thread):
         if len(self.gas_con_window) > self.gas_con_window_size:
             self.gas_con_window.pop(0)
         return sum(self.gas_con_window) / len(self.gas_con_window)
-    
+
     def run(self):
         log_conf = LogConfig(name='Logger', period_in_ms=10)  # 20 Hz
         log_conf.add_variable('stateEstimate.vx', 'float')
@@ -168,7 +169,7 @@ class LoggerThread(Thread):
         log_conf.add_variable('windSensor.flowX', 'int16_t')
         log_conf.add_variable('windSensor.flowY', 'int16_t')
         log_conf.add_variable('windSensor.gas', 'int16_t')
-        
+
         log_conf_multi = LogConfig(name='Multiranger_Logger', period_in_ms=10)  # 10 Hz
         log_conf_multi.add_variable('range.front', 'float')
         log_conf_multi.add_variable('range.back', 'float')
@@ -258,7 +259,6 @@ class LoggerThread(Thread):
             self.range_back = data['range.back']
             self.range_left = data['range.left']
             self.range_right = data['range.right']
-            
 
         def log_error(logconf, msg):
             print(f"Logging error: {msg}")
@@ -283,7 +283,6 @@ class LoggerThread(Thread):
             log_conf_multi.stop()
         except Exception as e:
             print("Logging error:", e)
-
 
 
 # === NAVIGTION MODES ===
@@ -374,7 +373,6 @@ def gradientSearch(mc, logger):
     gradientSurge(mc, logger)
 
 
-
 # === CAPABILITY TEST MODES ===
 
 def spiralTest(mc, logger):
@@ -388,10 +386,11 @@ def inFlightTurnTest(mc, logger):
     while True:
         checkRangers(logger)
         if logger.calibrated:  # Ensure the sensor is calibrated
-            print(f"Bx: {logger.latest_bx:.2f}, By: {logger.latest_by:.2f}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}, Flow Magnitude: {logger.flowMag}")
+            print(
+                f"Bx: {logger.latest_bx:.2f}, By: {logger.latest_by:.2f}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}, Flow Magnitude: {logger.flowMag}")
             while logger.flowMag >= min_flow_threshold:
                 checkRangers(logger)
-                #print(f"Flow angle at: {logger.flowAngle}, Flow Magnitude is: {logger.flowMag}")
+                # print(f"Flow angle at: {logger.flowAngle}, Flow Magnitude is: {logger.flowMag}")
                 flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
                 error = desired_flow_angle - logger.flowAngle
                 current_time = logger.microsecond
@@ -403,28 +402,33 @@ def inFlightTurnTest(mc, logger):
                 previous_time = current_time
 
                 if abs(error) <= angle_threshold:  # if error is within desired threshold, hover
-                    print(f"Within Threshold. Moving towards detected flow at {logger.flowAngle} degrees with a magnitude of {logger.flowMag}")
-                    mc.stop() # Start Non-Blocking Turn
+                    print(
+                        f"Within Threshold. Moving towards detected flow at {logger.flowAngle} degrees with a magnitude of {logger.flowMag}")
+                    mc.stop()  # Start Non-Blocking Turn
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
 
-                elif (270 <= logger.flowAngle <= 360) or ((desired_flow_angle + angle_threshold) <= logger.flowAngle <= 270):
-                    right_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                elif (270 <= logger.flowAngle <= 360) or (
+                        (desired_flow_angle + angle_threshold) <= logger.flowAngle <= 270):
+                    right_command = abs(turn_command) / 100  # Convert to angular rate in degrees/s, scale down
                     right_command = max(min(right_command, 1.0), 0)  # Scale to Crazyflie range
-                    print(f"Turning left, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error: {error} ; command:{right_command}")
+                    print(
+                        f"Turning left, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error: {error} ; command:{right_command}")
                     mc.start_turn_left(right_command * 90)  # Convert to appropriate angular rate
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
 
-                elif (90 <= logger.flowAngle <= (desired_flow_angle - angle_threshold)) or (0 <= logger.flowAngle <= 90):
-                    left_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                elif (90 <= logger.flowAngle <= (desired_flow_angle - angle_threshold)) or (
+                        0 <= logger.flowAngle <= 90):
+                    left_command = abs(turn_command) / 100  # Convert to angular rate in degrees/s, scale down
                     left_command = max(min(left_command, 1.0), 0)  # Scale to Crazyflie range
                     left_command = abs(left_command)  # Make positive for turn_left function
-                    print(f"Turning right, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error:{error} ; command:{left_command}")
+                    print(
+                        f"Turning right, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error:{error} ; command:{left_command}")
                     mc.start_turn_right(left_command * 90)  # Convert to appropriate angular rate
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
-                    
+
                 last_error = error
         else:
             print("Calibrating...")
@@ -442,10 +446,11 @@ def sensorResponseTest(mc, logger):
     global previous_error, integral, previous_time, current_time, drone_heading, flowMap, desired_flow_angle, min_flow_threshold, angle_threshold, Kp, Ki, Kd, last_error
     while True:
         if logger.calibrated:  # Ensure the sensor is calibrated
-            print(f"Bx: {logger.latest_bx:.2f}, By: {logger.latest_by:.2f}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}, Flow Magnitude: {logger.flowMag}")
+            print(
+                f"Bx: {logger.latest_bx:.2f}, By: {logger.latest_by:.2f}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}, Flow Magnitude: {logger.flowMag}")
             checkRangers(logger)
             while logger.flowMag >= min_flow_threshold:
-                #print(f"Flow angle at: {logger.flowAngle}, Flow Magnitude is: {logger.flowMag}")
+                # print(f"Flow angle at: {logger.flowAngle}, Flow Magnitude is: {logger.flowMag}")
                 flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
                 error = desired_flow_angle - logger.flowAngle
                 current_time = logger.microsecond
@@ -457,25 +462,30 @@ def sensorResponseTest(mc, logger):
                 previous_time = current_time
 
                 if abs(error) <= angle_threshold:  # if error is within desired threshold, hover
-                    print(f"Within Threshold. Moving towards detected flow at {logger.flowAngle} degrees with a magnitude of {logger.flowMag}")
+                    print(
+                        f"Within Threshold. Moving towards detected flow at {logger.flowAngle} degrees with a magnitude of {logger.flowMag}")
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
 
-                elif (270 <= logger.flowAngle <= 360) or ((desired_flow_angle + angle_threshold) <= logger.flowAngle <= 270):
-                    right_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                elif (270 <= logger.flowAngle <= 360) or (
+                        (desired_flow_angle + angle_threshold) <= logger.flowAngle <= 270):
+                    right_command = abs(turn_command) / 100  # Convert to angular rate in degrees/s, scale down
                     right_command = max(min(right_command, 1.0), 0)  # Scale to Crazyflie range
-                    print(f"Turning left, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error: {error} ; command:{right_command}")
+                    print(
+                        f"Turning left, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error: {error} ; command:{right_command}")
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
 
-                elif (90 <= logger.flowAngle <= (desired_flow_angle - angle_threshold)) or (0 <= logger.flowAngle <= 90):
-                    left_command = abs(turn_command)/100  # Convert to angular rate in degrees/s, scale down
+                elif (90 <= logger.flowAngle <= (desired_flow_angle - angle_threshold)) or (
+                        0 <= logger.flowAngle <= 90):
+                    left_command = abs(turn_command) / 100  # Convert to angular rate in degrees/s, scale down
                     left_command = max(min(left_command, 1.0), 0)  # Scale to Crazyflie range
                     left_command = abs(left_command)  # Make positive for turn_left function
-                    print(f"Turning right, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error:{error} ; command:{left_command}")
+                    print(
+                        f"Turning right, source angle & Magnitude: {logger.flowAngle} | {logger.flowMag} ; error:{error} ; command:{left_command}")
                     time.sleep(0.05)
                     flowMap.append((logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
-                    
+
                 last_error = error
         else:
             print("Calibrating...")
@@ -513,7 +523,6 @@ def multirangerTest(mc, logger):
         checkRangers(logger)
 
 
-
 # === INITIAL FLOW DISCOVERY FUNCTIONS ===
 
 # Search for gas feducial
@@ -531,7 +540,7 @@ def search_for_gas(mc, logger):
         mc.start_linear_motion(SEARCH_SPEED_X, SEARCH_SPEED_Y, 0)
 
         while (logger.droneX < CAST_DISTANCE_X + start_posX and
-            logger.droneY < CAST_DISTANCE_Y + start_posY):
+               logger.droneY < CAST_DISTANCE_Y + start_posY):
             # Check thresholds during casting - exit only if BOTH exceed threshold
             flowMap.append((logger.droneX, logger.droneY, logger.gas_con, logger.flowAngle))
             local_gas_concentration.append((logger.droneX, logger.droneY, logger.gas_con))
@@ -540,15 +549,15 @@ def search_for_gas(mc, logger):
 
         mc.stop()
         time.sleep(0.5)
-        return_x = logger.droneX - (CAST_DISTANCE_X/2) 
-        return_y = logger.droneY - (CAST_DISTANCE_Y/2)
+        return_x = logger.droneX - (CAST_DISTANCE_X / 2)
+        return_y = logger.droneY - (CAST_DISTANCE_Y / 2)
         return_gas_con = max([point[2] for point in local_gas_concentration])
         dx, dy = calculate_spatial_gradient(local_gas_concentration)
 
         # Calculate Local Gas Concentration Gradient for First Cast
         if dx is not None:
-            gradient_magnitude = np.sqrt(dx**2 + dy**2)
-            gradient_angle = (np.degrees(np.arctan2(dy, dx)))%360
+            gradient_magnitude = np.sqrt(dx ** 2 + dy ** 2)
+            gradient_angle = (np.degrees(np.arctan2(dy, dx))) % 360
             gas_gradients.append((return_x, return_y, return_gas_con, gradient_magnitude))
             print(f"Local gradient: magnitude={gradient_magnitude:.3f}, angle={gradient_angle:.1f}°")
 
@@ -571,18 +580,18 @@ def search_for_gas(mc, logger):
         mc.stop()
         time.sleep(0.5)
 
-        return_x = logger.droneX - (CAST_DISTANCE_X/2) 
-        return_y = logger.droneY - (CAST_DISTANCE_Y/2)
+        return_x = logger.droneX - (CAST_DISTANCE_X / 2)
+        return_y = logger.droneY - (CAST_DISTANCE_Y / 2)
         return_gas_con = max([point[2] for point in local_gas_concentration])
         dx, dy = calculate_spatial_gradient(local_gas_concentration)
 
         # Calculate Local Gas Concentration Gradient for First Cast
         if dx is not None:
-            gradient_magnitude = np.sqrt(dx**2 + dy**2)
-            gradient_angle = (np.degrees(np.arctan2(dy, dx)))%360
+            gradient_magnitude = np.sqrt(dx ** 2 + dy ** 2)
+            gradient_angle = (np.degrees(np.arctan2(dy, dx))) % 360
             gas_gradients.append((return_x, return_y, return_gas_con, gradient_magnitude))
             print(f"Local gradient: magnitude={gradient_magnitude:.3f}, angle={gradient_angle:.1f}°")
-        
+
         # Reset for the next cast
         local_gas_concentration = []  # Reset for next cast
 
@@ -600,7 +609,7 @@ def search_for_wind(mc, logger):
     time.sleep(1)
 
     # Keep AND logic - continue while BOTH are below threshold
-    while (logger.flowMag <= min_flow_threshold) and (abs(logger.gas_con) <= GAS_THRESHOLD):
+    while (logger.flowMag <= min_flow_threshold) or (abs(logger.gas_con) <= GAS_THRESHOLD):
         print(f"Searching - Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
         flowMap.append(
             (logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
@@ -626,7 +635,7 @@ def search_for_wind(mc, logger):
         time.sleep(0.5)
 
         # Check again before right cast - exit only if BOTH exceed threshold
-        if (logger.flowMag > min_flow_threshold):# and (abs(logger.gas_con) > GAS_THRESHOLD):
+        if (logger.flowMag > min_flow_threshold):  # and (abs(logger.gas_con) > GAS_THRESHOLD):
             print(f"Both thresholds crossed between casts! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
             return
 
@@ -639,7 +648,7 @@ def search_for_wind(mc, logger):
         while (logger.droneX < CAST_DISTANCE_X + start_posX and
                logger.droneY > -CAST_DISTANCE_Y + start_posY):
             # Check thresholds during casting - exit only if BOTH exceed threshold
-            if (logger.flowMag > min_flow_threshold):# and (abs(logger.gas_con) > GAS_THRESHOLD):
+            if (logger.flowMag > min_flow_threshold):  # and (abs(logger.gas_con) > GAS_THRESHOLD):
                 print(f"Both thresholds crossed during right cast! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
                 mc.stop()
                 return  # Exit the function immediately
@@ -654,9 +663,10 @@ def search_for_wind(mc, logger):
         CAST_DISTANCE_X += 0.3
         CAST_DISTANCE_Y += 0.3
 
-    #print(f"Both thresholds detected! Wind: {logger.flowMag:.2f} | Gas: {logger.gas_con}")
+    # print(f"Both thresholds detected! Wind: {logger.flowMag:.2f} | Gas: {logger.gas_con}")
     # mc.stop()
     # time.sleep(0.01)
+
 
 # Zig-Zag Cast/Searching Motion with Immediate Turn to Source
 def seek_and_turn(mc, logger):
@@ -724,7 +734,6 @@ def seek_and_turn(mc, logger):
         CAST_DISTANCE_Y += 0.3
 
 
-
 # === CAST/BACKTRACK FUNCTIONS ===
 
 # Spiral Search: Expanding Spiral Motion Until Wind is Detected
@@ -784,7 +793,7 @@ def unilateralCast(mc, logger):
                 print(f"Both thresholds crossed during right cast! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
                 mc.stop()
                 turnToSource(mc, logger)  # Immediately turn to source
-                return  # Exit the function immediately 
+                return  # Exit the function immediately
         mc.stop()
 
         # Cast Right
@@ -810,7 +819,6 @@ def unilateralCast(mc, logger):
     time.sleep(0.2)
 
 
-
 # === SURGE FUNCTIONS ===
 
 # Vector Surge: Direct Velocity Control Towards Source
@@ -825,6 +833,7 @@ def approach_wind_source(mc, logger):
         checkRangers(logger)
         if logger.flowMag <= min_flow_threshold:
             print("Lost wind signal, resuming search...")
+            return_to_last_flow(mc,logger)
             search_for_wind(mc, logger)
             continue
 
@@ -953,26 +962,25 @@ def spiralSurge(mc, logger):
 # Gradient Surge:
 def gradientSurge(mc, logger):
     global flowMap, gas_gradients
-    
+
     gas_data = gas_gradients.copy()  # Copy existing data points
     gas_x = [point[0] for point in gas_data]
     gas_y = [point[1] for point in gas_data]
     concentrations = [point[2] for point in gas_data]
     gas_concentration_index = concentrations.index(max(concentrations))  # Index of highest concentration
     gas_gradient_magnitude_index = [point[3] for point in gas_data]
-    
-    
-    mc.move_distance(gas_x[gas_concentration_index] - logger.droneX, gas_y[gas_concentration_index] - logger.droneY, 1.0, 0.5)  # Move to last known gas gradient position
+
+    mc.move_distance(gas_x[gas_concentration_index] - logger.droneX, gas_y[gas_concentration_index] - logger.droneY,
+                     1.0, 0.5)  # Move to last known gas gradient position
     time.sleep(2)
-    
+
     print(f"Final position: ({logger.droneX:.2f}, {logger.droneY:.2f})")
     print(f"Final gas concentration: {logger.gas_con}")
-    
+
     # Land at estimated source location
     mc.stop()
     time.sleep(1)
     print("Landing at estimated source location...")
-
 
 
 # === HELPER FUNCTIONS ===
@@ -984,13 +992,59 @@ def return_to_last_flow(mc, logger):
         print("No flow data available to return to.")
         return
 
-    flow = flowMap[:][15] # Last 200 points
-    last_flow_index = max(flow[-200:-1])
-    target_x, target_y = flow[last_flow_index][0], flow[last_flow_index][1]
-    print(f"Returning to last known flow location at ({target_x:.2f}, {target_y:.2f})")
-    mc.move_distance(target_x - logger.droneX, target_y - logger.droneY, 1.0, 0.5)  # Move to last known flow position
+    flow = flowMap[-200:]  # Last 200 points
+    last_flow_entry = None
+
+    for entry in reversed(flow):
+        if entry[4] >= min_flow_threshold:  # entry[2] is flowMag
+            last_flow_entry = entry
+            break
+
+    target_x, target_y, bx, by, flowMag, flowAngle = last_flow_entry
+
+    print(f"Returning to last flow above threshold ({flowMag:.2f}) "
+          f"at ({target_x:.2f}, {target_y:.2f})")
+    checkRangers(logger)
+    # Move relative to current position (XY only for now)
+    mc.move_distance(target_x - logger.droneX, target_y - logger.droneY, 0.0, APPROACH_SPEED_X)
+
     time.sleep(2)
     print(f"Current position: ({logger.droneX:.2f}, {logger.droneY:.2f})")
+# def return_to_last_flow(mc, logger):
+#     global flowMap
+#     if not flowMap:
+#         print("No flow data available to return to.")
+#         return
+#
+#     # Look at last 200 entries (or fewer if not enough)
+#     recent_flows = flowMap[-200:]
+#
+#     # Find the index of the entry with max flowMag (index 2 in tuple)
+#     last_flow_index = max(range(len(recent_flows)), key=lambda i: recent_flows[i][2])
+#
+#     target_x, target_y = recent_flows[last_flow_index][0], recent_flows[last_flow_index][1]
+#     print(f"Returning to last known flow location at ({target_x:.2f}, {target_y:.2f})")
+#
+#     # Start linear motion (non-blocking) — only x, y
+#     mc.start_linear_motion(target_x, target_y, 0.0, 0.0)
+#
+#     # Track until the drone reaches the goal
+#     tolerance = 0.1  # meters, adjust as needed
+#     while True:
+#         dx = target_x - logger.droneX
+#         dy = target_y - logger.droneY
+#         dist = (dx**2 + dy**2) ** 0.5
+#
+#         if dist <= tolerance:
+#             mc.stop()  # stop linear motion
+#             break
+#
+#         time.sleep(0.1)  # don’t spam CPU
+#
+#     print(f"Arrived at ({logger.droneX:.2f}, {logger.droneY:.2f})")
+
+
+
 
 # Calculate Gradient of Local Gas Concentration
 def calculate_spatial_gradient(positions_concentrations, window_size=200):
@@ -1000,28 +1054,27 @@ def calculate_spatial_gradient(positions_concentrations, window_size=200):
     """
     if len(positions_concentrations) < 3:
         return None, None
-    
 
     # Convert to numpy arrays
     data = np.array(positions_concentrations)
     positions = data[:, :2]  # x, y coordinates
     concentrations = data[:, 2]  # concentration values
-    
+
     # Check for spatial variation
     x_range = np.max(positions[:, 0]) - np.min(positions[:, 0])
     y_range = np.max(positions[:, 1]) - np.min(positions[:, 1])
-    
+
     if x_range < 0.01 and y_range < 0.01:
         return 0.0, 0.0  # No spatial variation
-    
+
     # Use linear regression to estimate gradient
     reg = LinearRegression()
     reg.fit(positions, concentrations)
-    
+
     # Gradient components are the coefficients
     dx, dy = reg.coef_
     return dx, dy
-    
+
 
 # Cast and Surge: Turn Towards Source Once Flow is Detected
 def turnToSource(mc, logger):
@@ -1105,7 +1158,6 @@ def checkRangers(logger):
     return False
 
 
-
 # === MAIN PROGRAM ===
 if __name__ == '__main__':
     cflib.crtp.init_drivers(enable_debug_driver=False)
@@ -1115,7 +1167,7 @@ if __name__ == '__main__':
         fieldnames = [
             "Month", "Day", "Hour", "Minute", "Second", "Microsecond",
             "Speed", "Vx", "Vy", "PosX", "PosY", "Bx", "By",
-            "Flow Mag", "Flow Angle", "Gas Concentration", "Range Front", 
+            "Flow Mag", "Flow Angle", "Gas Concentration", "Range Front",
             "Range Back", "Range Left", "Range Right",
         ]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
@@ -1129,8 +1181,6 @@ if __name__ == '__main__':
             platform.send_arming_request(True)
             print("Armed! (but not taking off)")
 
-            
-            
             # Initialize motion commander
             mc = MotionCommander(scf, default_height=HEIGHT)
 

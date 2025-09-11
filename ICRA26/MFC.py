@@ -13,6 +13,7 @@ from cflib.crazyflie.platformservice import PlatformService
 from cflib.positioning.motion_commander import MotionCommander
 from cflib.crazyflie.log import LogConfig
 import numpy as np
+from sklearn.linear_model import LinearRegression
 
 # === CONFIGURATION ===
 URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
@@ -38,7 +39,7 @@ current_time = 0
 drone_heading = 0
 
 # Navigation Vars
-min_flow_threshold = 15
+min_flow_threshold = 45
 angle_threshold = 10
 desired_flow_angle = 180
 flowMap = []
@@ -53,7 +54,7 @@ SEARCH_DURATION = 0.7  # seconds per search segment
 APPROACH_SPEED = 0.5
 APPROACH_SPEED_X = 0.5
 APPROACH_SPEED_Y = 1
-MAX_FLOW_THRESHOLD = 90  # When to consider we've reached the source
+MAX_FLOW_THRESHOLD = 175  # When to consider we've reached the source
 LOCAL_MAX_FLOW = 0  # Parameter used for Cast and Surge Algorithm
 TURN_RATE = 45  # degrees/second for turning towards source
 
@@ -61,17 +62,18 @@ TURN_RATE = 45  # degrees/second for turning towards source
 FORWARD_MOVE_DURATION = 1  # seconds
 CAST_DURATION = 2  # seconds
 CAST_DISTANCE = 1.5  # meters for unilateral cast
-CAST_DISTANCE_X = 0.3
-CAST_DISTANCE_Y = 1
+CAST_DISTANCE_X = 0.15
+CAST_DISTANCE_Y = 0.6
 
 # Test Parameters
 TEST_DISTANCE = 1.5  # meters for state estimator test
 
 # Multiranger Parameters
-MIN_RANGER_DISTANCE = 1000  # mm, minimum distance to obstacle
+MIN_RANGER_DISTANCE = 1200
+  # mm, minimum distance to obstacle
 
 # Gas Sensor Parameters
-GAS_THRESHOLD = 8  # Threshold for gas concentration
+GAS_THRESHOLD = 4  # Threshold for gas concentration
 local_gas_concentration = []
 gas_gradients = []
 
@@ -99,7 +101,7 @@ class LoggerThread(Thread):
         self.angle_window_size = 5  # Reduced for faster response
 
         # Calibration parameters
-        self.calib_window = 100
+        self.calib_window = 400
         self.bx_window = []
         self.by_window = []
         self.gas_con_window = []
@@ -173,8 +175,8 @@ class LoggerThread(Thread):
         log_conf_multi.add_variable('range.right', 'float')
 
         def log_data(timestamp, data, logconf):
-            bx = data['windSensor.flowX']
-            by = data['windSensor.flowY']
+            bx = -data['windSensor.flowX']
+            by = -data['windSensor.flowY']
             gas_con = data['windSensor.gas']
 
             # Calibration step
@@ -218,9 +220,10 @@ class LoggerThread(Thread):
             self.gas_con = gas_cal
 
             # Calculate flow angle and magnitude
-            raw_angle = ((np.arctan2(by_cal, bx_cal) * (180 / np.pi)) - 180) % 360
+            raw_angle = ((np.arctan2(by_cal, bx_cal) * (180 / np.pi))) % 360
             gas_con = self.gas_con
-            self.gas_con = self.moving_average_gas(gas_con)
+            #
+            self.gas_con = abs(self.moving_average_gas(gas_con))
             self.flowAngle = self.moving_average_angle(raw_angle)
             self.flowMag = np.sqrt(bx_cal ** 2 + by_cal ** 2)
 
@@ -242,7 +245,7 @@ class LoggerThread(Thread):
                     "By": by_cal,
                     "Flow Mag": self.flowMag,
                     "Flow Angle": self.flowAngle,
-                    "Gas Concentration": data['windSensor.gas'],
+                    "Gas Concentration": self.gas_con,
                     "Range Front": self.range_front,
                     "Range Back": self.range_back,
                     "Range Left": self.range_left,
@@ -427,10 +430,11 @@ def inFlightTurnTest(mc, logger):
             time.sleep(0.2)
 
 
-def gradientGasDetectionTest(mc, logger):
-    global flowMap
+def gasDetectionTest(mc, logger):
     print("Starting gradient gas detection test...")
-    search_for_wind(mc, logger)
+    while True:
+        checkRangers(logger)
+        print(f"Gas Concentration: {logger.gas_con}, Drone X: {logger.droneX}, Drone Y: {logger.droneY}")
 
 
 def sensorResponseTest(mc, logger):
@@ -536,8 +540,8 @@ def search_for_gas(mc, logger):
         mc.stop()
         time.sleep(0.5)
         return_x = logger.droneX - (CAST_DISTANCE_X/2) 
-        return_y = logger.droneX - (CAST_DISTANCE_Y/2)
-        return_gas_con = max(local_gas_concentration[:][2])
+        return_y = logger.droneY - (CAST_DISTANCE_Y/2)
+        return_gas_con = max([point[2] for point in local_gas_concentration])
         dx, dy = calculate_spatial_gradient(local_gas_concentration)
 
         # Calculate Local Gas Concentration Gradient for First Cast
@@ -559,6 +563,7 @@ def search_for_gas(mc, logger):
                logger.droneY > -CAST_DISTANCE_Y + start_posY):
             # Check thresholds during casting - exit only if BOTH exceed threshold
             flowMap.append((logger.droneX, logger.droneY, logger.gas_con, logger.flowAngle))
+            local_gas_concentration.append((logger.droneX, logger.droneY, logger.gas_con))
             print(f"Casting Right - Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
             time.sleep(0.01)
 
@@ -566,8 +571,8 @@ def search_for_gas(mc, logger):
         time.sleep(0.5)
 
         return_x = logger.droneX - (CAST_DISTANCE_X/2) 
-        return_y = logger.droneX - (CAST_DISTANCE_Y/2)
-        return_gas_con = max(local_gas_concentration[:][2])
+        return_y = logger.droneY - (CAST_DISTANCE_Y/2)
+        return_gas_con = max([point[2] for point in local_gas_concentration])
         dx, dy = calculate_spatial_gradient(local_gas_concentration)
 
         # Calculate Local Gas Concentration Gradient for First Cast
@@ -594,7 +599,7 @@ def search_for_wind(mc, logger):
     time.sleep(1)
 
     # Keep AND logic - continue while BOTH are below threshold
-    while (logger.flowMag <= min_flow_threshold): #and (abs(logger.gas_con) <= GAS_THRESHOLD):
+    while (logger.flowMag <= min_flow_threshold) and (abs(logger.gas_con) <= GAS_THRESHOLD):
         print(f"Searching - Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
         flowMap.append(
             (logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
@@ -608,7 +613,7 @@ def search_for_wind(mc, logger):
         while (logger.droneX < CAST_DISTANCE_X + start_posX and
                logger.droneY < CAST_DISTANCE_Y + start_posY):
             # Check thresholds during casting - exit only if BOTH exceed threshold
-            if (logger.flowMag > min_flow_threshold):# and (abs(logger.gas_con) > GAS_THRESHOLD):
+            if (logger.flowMag > min_flow_threshold) and (abs(logger.gas_con) > GAS_THRESHOLD):
                 print(f"Both thresholds crossed during left cast! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
                 mc.stop()
                 return  # Exit the function immediately
@@ -822,7 +827,7 @@ def approach_wind_source(mc, logger):
             continue
 
         # Calculate wind source direction (opposite to flow direction)
-        source_angle = (logger.flowAngle - 180) % 360
+        source_angle = (logger.flowAngle + 180) % 360
         # np.gradient(flowMap[:][0:3])
         flowMap.append(
             (logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
@@ -946,12 +951,12 @@ def gradientSurge(mc, logger):
     gas_data = gas_gradients.copy()  # Copy existing data points
     gas_x = [point[0] for point in gas_data]
     gas_y = [point[1] for point in gas_data]
-    gas_concentration = [point[2] for point in gas_data]
-    gas_gradient_magnitude = [point[3] for point in gas_data]
+    concentrations = [point[2] for point in gas_data]
+    gas_concentration_index = concentrations.index(max(concentrations))  # Index of highest concentration
+    gas_gradient_magnitude_index = [point[3] for point in gas_data]
     
-    gradient_threshold = 0.001  # Minimum gradient magnitude to continue
     
-    mc.move_to(gas_x, gas_y, 1.0, 0.5)  # Move to last known gas gradient position
+    mc.move_distance(gas_x[gas_concentration_index] - logger.droneX, gas_y[gas_concentration_index] - logger.droneY, 1.0, 0.5)  # Move to last known gas gradient position
     time.sleep(2)
     
     print(f"Final position: ({logger.droneX:.2f}, {logger.droneY:.2f})")
@@ -972,34 +977,29 @@ def calculate_spatial_gradient(positions_concentrations, window_size=200):
     Calculate 2D gradient from spatial concentration data
     Returns gradient vectors (dx, dy) pointing toward steepest ascent
     """
-    if len(positions_concentrations) < window_size:
+    if len(positions_concentrations) < 3:
         return None, None
     
-    # Extract recent data
-    recent_data = positions_concentrations[-window_size:]
+
+    # Convert to numpy arrays
+    data = np.array(positions_concentrations)
+    positions = data[:, :2]  # x, y coordinates
+    concentrations = data[:, 2]  # concentration values
     
-    # Separate into arrays
-    x_coords = np.array([point[0] for point in recent_data])
-    y_coords = np.array([point[1] for point in recent_data])
-    concentrations = np.array([point[2] for point in recent_data])
+    # Check for spatial variation
+    x_range = np.max(positions[:, 0]) - np.min(positions[:, 0])
+    y_range = np.max(positions[:, 1]) - np.min(positions[:, 1])
     
-    # Calculate gradients using finite differences
-    if len(set(x_coords)) > 1 and len(set(y_coords)) > 1:
-        # If we have variation in both x and y
-        dx = np.gradient(concentrations, x_coords)[-1]  # Most recent gradient
-        dy = np.gradient(concentrations, y_coords)[-1]
-        print(f"Calculated (x, y) gradients - dx: {dx:.4f}, dy: {dy:.4f}")
-        return dx, dy
-    elif len(set(x_coords)) > 1:
-        # Only x variation
-        dx = np.gradient(concentrations, x_coords)[-1]
-        return dx, 0
-    elif len(set(y_coords)) > 1:
-        # Only y variation  
-        dy = np.gradient(concentrations, y_coords)[-1]
-        return 0, dy
-    else:
-        return 0, 0
+    if x_range < 0.01 and y_range < 0.01:
+        return 0.0, 0.0  # No spatial variation
+    
+    # Use linear regression to estimate gradient
+    reg = LinearRegression()
+    reg.fit(positions, concentrations)
+    
+    # Gradient components are the coefficients
+    dx, dy = reg.coef_
+    return dx, dy
     
 
 # Cast and Surge: Turn Towards Source Once Flow is Detected
@@ -1108,9 +1108,7 @@ if __name__ == '__main__':
             platform.send_arming_request(True)
             print("Armed! (but not taking off)")
 
-            # Start logging thread
-            logger = LoggerThread(cf, writer)
-            logger.start()
+            
             
             # Initialize motion commander
             mc = MotionCommander(scf, default_height=HEIGHT)
@@ -1119,6 +1117,10 @@ if __name__ == '__main__':
             print("Taking off...")
             mc.take_off(HEIGHT)
             time.sleep(2)
+            # Start logging thread
+            logger = LoggerThread(cf, writer)
+            logger.start()
+            time.sleep(5)
 
             try:
                 # Wait for calibration
@@ -1132,7 +1134,7 @@ if __name__ == '__main__':
                 # ===== CHOOSE NAVIGATION MODE =====
 
                 # Method 1: Direct velocity control (recommended)
-                # navigate_to_wind_source(mc, logger)
+                navigate_to_wind_source(mc, logger)
 
                 # Method 2: Turn and surge (alternative)
                 # alternative_turn_and_surge(mc, logger)
@@ -1158,11 +1160,11 @@ if __name__ == '__main__':
                 # Method 9: In-Flight Turn Test (Flow-Based Turning Test)
                 # inFlightTurnTest(mc, logger)
 
-                # Method 10: Gradient Gas Detection Test (Gas Gradient Detection Test)
-                # gradientGasDetectionTest(mc, logger)
+                # Method 10: Gas Detection Test (Gas Gradient Detection Test)
+                # gasDetectionTest(mc, logger)
 
                 # Method 11: Gradient Search (Gas Gradient-Based Navigation Test)
-                gradientSearch(mc, logger)
+                # gradientSearch(mc, logger)
 
             finally:
                 print("Stopping logging...")

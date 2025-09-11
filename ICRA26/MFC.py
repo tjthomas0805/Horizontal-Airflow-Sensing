@@ -18,7 +18,7 @@ import numpy as np
 # === CONFIGURATION ===
 URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
 directory_path = r"C:\Users\ltjth\Documents\Research\icra26data"
-base_filename = "A_VS_noTurn"
+base_filename = "C_VS_noTurn"
 file_extension = ".csv"
 
 # Speeds for square flights (m/s)
@@ -57,6 +57,7 @@ APPROACH_SPEED_Y = 1
 MAX_FLOW_THRESHOLD = 175  # When to consider we've reached the source
 LOCAL_MAX_FLOW = 0  # Parameter used for Cast and Surge Algorithm
 TURN_RATE = 45  # degrees/second for turning towards source
+initialCastFactor = 1
 
 # Cast and Surge Algorithm Parameters
 FORWARD_MOVE_DURATION = 1  # seconds
@@ -294,7 +295,7 @@ def navigate_to_wind_source(mc, logger):
     print("Starting wind source navigation...")
 
     # Phase 1: Search for wind
-    search_for_wind(mc, logger)
+    search_for_wind(mc, logger,initialCastFactor)
 
     # Phase 2: Navigate towards source
     approach_wind_source(mc, logger)
@@ -601,12 +602,13 @@ def search_for_gas(mc, logger):
 
 
 # Generic Zig-Zag Cast/Searching Motion
-def search_for_wind(mc, logger):
+def search_for_wind(mc, logger, castFactor):
     global flowMap, CAST_DISTANCE_X, CAST_DISTANCE_Y
     """
     Search phase - move forward slowly until wind is detected
     """
-    time.sleep(1)
+
+    time.sleep(0.3)
 
     # Keep AND logic - continue while BOTH are below threshold
     while (logger.flowMag <= min_flow_threshold) and (abs(logger.gas_con) <= GAS_THRESHOLD):
@@ -620,8 +622,8 @@ def search_for_wind(mc, logger):
         checkRangers(logger)
         mc.start_linear_motion(SEARCH_SPEED_X, SEARCH_SPEED_Y, 0)
 
-        while (logger.droneX < CAST_DISTANCE_X + start_posX and
-               logger.droneY < CAST_DISTANCE_Y + start_posY):
+        while (logger.droneX < castFactor*CAST_DISTANCE_X + start_posX and
+               logger.droneY < castFactor*CAST_DISTANCE_Y + start_posY):
             checkRangers(logger)
             # Check thresholds during casting - exit only if BOTH exceed threshold
             if (logger.flowMag > min_flow_threshold) and (abs(logger.gas_con) > GAS_THRESHOLD):
@@ -646,8 +648,8 @@ def search_for_wind(mc, logger):
         checkRangers(logger)
         mc.start_linear_motion(SEARCH_SPEED_X, -SEARCH_SPEED_Y, 0)
 
-        while (logger.droneX < CAST_DISTANCE_X + start_posX and
-               logger.droneY > -CAST_DISTANCE_Y + start_posY):
+        while (logger.droneX < castFactor*CAST_DISTANCE_X + start_posX and
+               logger.droneY > -castFactor*CAST_DISTANCE_Y + start_posY):
             checkRangers(logger)
             # Check thresholds during casting - exit only if BOTH exceed threshold
             if (logger.flowMag > min_flow_threshold):  # and (abs(logger.gas_con) > GAS_THRESHOLD):
@@ -835,13 +837,13 @@ def approach_wind_source(mc, logger):
     while True:
         checkRangers(logger)
         magBuffer.append(logger.flowMag)
-        if len(magBuffer)>5:
+        if len(magBuffer)>10:
             magBuffer.pop(0)
             avgmagBuffer = sum(magBuffer)/len(magBuffer)
             if avgmagBuffer <= min_flow_threshold:
                 print("Lost wind signal, resuming search...")
-                return_to_last_flow(mc,logger)
-                #search_for_wind(mc, logger)
+                #return_to_last_flow(mc,logger)
+                search_for_wind(mc, logger, 1.5)
                 continue
 
         # Calculate wind source direction (opposite to flow direction)
@@ -999,7 +1001,7 @@ def return_to_last_flow(mc, logger):
         print("No flow data available to return to.")
         return
 
-    flow = flowMap[-200:]  # Last 200 points
+    flow = flowMap[-40:]  # Last 200 points
     last_flow_entry = None
     last_flow_entry = max(flow, key=lambda entry: entry[4])  # entry[4] is flowMag
     # for entry in reversed(flow):
@@ -1199,7 +1201,7 @@ if __name__ == '__main__':
             # Start logging thread
             logger = LoggerThread(cf, writer)
             logger.start()
-            time.sleep(5)
+            time.sleep(8)
 
             try:
                 # Wait for calibration

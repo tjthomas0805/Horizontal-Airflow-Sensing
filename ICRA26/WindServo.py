@@ -19,7 +19,7 @@ import numpy as np
 # === CONFIGURATION ===
 URI = 'radio://0/80/2M/E7E7E7E7E7'  # <-- change if needed
 directory_path = r"C:\Users\ltjth\Documents\Research\UKF_Data"
-base_filename = "windServoing"
+base_filename = "outside_MFC"
 file_extension = ".csv"
 first_flow_X, first_flow_Y = None, None
 last_flow_X, last_flow_Y = None, None
@@ -43,7 +43,7 @@ headings = [0,90,180,270]
 drone_heading = 0
 
 # Navigation Vars
-min_flow_threshold = 40
+min_flow_threshold = 100
 angle_threshold = 10
 desired_flow_angle = 180
 flowMap = []
@@ -80,11 +80,11 @@ STEP_DISTANCE = 0.5
 TEST_DISTANCE = 1.5  # meters for state estimator test
 
 # Multiranger Parameters
-MIN_RANGER_DISTANCE = 1250
+MIN_RANGER_DISTANCE = 1000
 # mm, minimum distance to obstacle
 
 # Gas Sensor Parameters
-GAS_THRESHOLD = 3  # Threshold for gas concentration
+GAS_THRESHOLD = 2  # Threshold for gas concentration
 MAX_GAS_THRESHOLD = 1023  # Threshold for gas concentration to consider source reached
 local_gas_concentration = []
 gas_gradients = []
@@ -768,7 +768,7 @@ def search_for_wind(mc, logger):
     time.sleep(1)
     print(f"Flow mag: {logger.flowMag:.2f} Gas: {logger.gas_con:.2f}")
     # Keep AND logic - continue while BOTH are below threshold
-    while (logger.flowMag <= min_flow_threshold):
+    while (logger.flowMag <= min_flow_threshold) or (abs(logger.gas_con) <= GAS_THRESHOLD):
         flowMap.append(
             (logger.droneX, logger.droneY, logger.latest_bx, logger.latest_by, logger.flowMag, logger.flowAngle))
 
@@ -778,10 +778,9 @@ def search_for_wind(mc, logger):
         start_posY = logger.droneY
         mc.start_linear_motion(SEARCH_SPEED_X, SEARCH_SPEED_Y, 0)
 
-        while (abs(start_posX - logger.droneX) < CAST_DISTANCE_X) and (
-                abs(start_posY - logger.droneY) < CAST_DISTANCE_Y):
+        while (abs(start_posX - logger.droneX) < CAST_DISTANCE_X):
             # Check thresholds during casting - exit only if BOTH exceed threshold
-            if (logger.flowMag > min_flow_threshold):
+            if (logger.flowMag > min_flow_threshold) and (abs(logger.gas_con) > GAS_THRESHOLD):
                 print(f"Both thresholds crossed during left cast! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
                 mc.stop()
                 return  # Exit the function immediately
@@ -802,8 +801,7 @@ def search_for_wind(mc, logger):
         start_posY = logger.droneY
         mc.start_linear_motion(SEARCH_SPEED_X, -SEARCH_SPEED_Y, 0)
 
-        while (abs(start_posX - logger.droneX) < CAST_DISTANCE_X) and (
-                abs(start_posY - logger.droneY) < 2 * CAST_DISTANCE_Y):
+        while (abs(start_posY - logger.droneY) > (-CAST_DISTANCE_Y)):
             # Check thresholds during casting - exit only if BOTH exceed threshold
             if (logger.flowMag > min_flow_threshold):  # and (abs(logger.gas_con) > GAS_THRESHOLD):
                 print(f"Both thresholds crossed during right cast! Wind: {logger.flowMag:.2f}, Gas: {logger.gas_con}")
@@ -1075,45 +1073,7 @@ def unilateralSurge(mc, logger):
     time.sleep(2)
     mc.land()
 
-def uni(mc, logger):
-    global flowMap, CAST_DISTANCE_Y
-    """
-    Approach phase - navigate towards wind source using flow direction
-    """
-    while True:
-        while (logger.gas_con < GAS_THRESHOLD):
-            checkRangers(logger)
-            start_posY = logger.droneY
-            print(logger.gas_con)
-            mc.start_linear_motion(0, SEARCH_SPEED_Y, 0)
-            while (abs(start_posY - logger.droneY) < CAST_DISTANCE_Y) and (logger.gas_con < GAS_THRESHOLD):
-                checkRangers(logger)
-                print(logger.gas_con)
-                print("Casting Left...")
-            mc.stop()
-            time.sleep(0.2)
 
-            print(logger.gas_con)
-            start_posY = logger.droneY
-            mc.start_linear_motion(0, -SEARCH_SPEED_Y, 0)
-            while (abs(start_posY - logger.droneY) < CAST_DISTANCE_Y) and (logger.gas_con < GAS_THRESHOLD):
-                checkRangers(logger)
-                print(logger.gas_con)
-                print("Casting Right...")
-            mc.stop()
-            time.sleep(0.2)
-
-            CAST_DISTANCE_Y += 0.1
-        print("Gas Threshold Crossed")
-        print(logger.gas_con)
-        start_posX = logger.droneX
-        mc.start_linear_motion(0.4, 0, 0)
-        while (abs(start_posX - logger.droneX) < STEP_DISTANCE) and (logger.gas_con > GAS_THRESHOLD):
-            checkRangers(logger)
-            print(logger.gas_con)
-            print("Surging Forward")
-    print("max flow reached, landing...")
-    mc.land()
 
 # Spiral Surge:
 def spiralSurge(mc, logger):
@@ -1323,7 +1283,7 @@ def checkRangers(logger):
     #print(logger.range_front, logger.range_back, logger.range_left, logger.range_right)
     if logger.range_front < MIN_RANGER_DISTANCE:
         raise InterruptedError("Obstacle detected in front! Stopping forward motion.")
-    if logger.range_back < 900:
+    if logger.range_back < 50:
         raise InterruptedError("Obstacle detected in back! Stopping backward motion.")
     if logger.range_left < MIN_RANGER_DISTANCE:
         raise InterruptedError("Obstacle detected on right! Stopping leftward motion.")
@@ -1414,7 +1374,6 @@ if __name__ == '__main__':
 
                 # Method 5: Cast and Surge (Alternative Algorithm)
                 #cast_and_surge(mc, logger)
-                #uni(mc,logger)
 
                 # Method 6: State Estimator Test (No Wind Navigation)
                 # stateEstimatorTest(mc, logger)
